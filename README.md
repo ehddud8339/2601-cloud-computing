@@ -20,5 +20,3 @@ sudo apt update && sudo apt install vagrant
 ### Create Vagrantfile
 
 노드명, 네트워크(NAT + Host-only, Port forwarding), VM 프로바이더 및 하드웨어 자원 설정, Vagrant SSH 설정 등을 명시
-
-

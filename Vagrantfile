@@ -5,7 +5,6 @@ Vagrant.configure("2") do |config|
   node_count = 3
   ip_base = "192.168.56."
   ip_offset = 10
-  ssh_port_base = 2200
 
   # 생성할 node의 ip와 명칭을 정의
   hosts_entries = (1..node_count).map do |i|
@@ -14,10 +13,9 @@ Vagrant.configure("2") do |config|
 
   # 반복문으로 전체 노드를 생성
   (1..node_count).each do |iter|
-    # node 이름, ip, host to node ssh 포트 정의
+    # node 이름, ip 정의
     node_name = "node#{iter}"
     node_ip = "#{ip_base}#{ip_offset + iter}"
-    ssh_host_port = ssh_port_base + iter
 
     # node 설정
     config.vm.define node_name do |node|
@@ -31,10 +29,6 @@ Vagrant.configure("2") do |config|
         vb.memory = 4096
         vb.cpus = 2
       end
-
-      # vagrant ssh로 접속 로그인 정보
-      node.ssh.username = "vagrant"
-      node.ssh.password = "vagrant"
 
       # vm 생성 이후 자동으로 실행될 shell 명령
       node.vm.provision "shell", inline: <<-SHELL
