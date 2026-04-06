@@ -1,8 +1,9 @@
+# 2025126653 이동영 - Lab 02 (IaC)
 Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
   
   # node 갯수와 ip, ssh 형식 지정
-  node_count = 3
+  node_count = 5
   ip_base = "192.168.56."
   ip_offset = 10
 

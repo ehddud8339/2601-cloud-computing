@@ -20,3 +20,19 @@ sudo apt update && sudo apt install vagrant
 ### Create Vagrantfile
 
 노드명, 네트워크(NAT + Host-only, Port forwarding), VM 프로바이더 및 하드웨어 자원 설정, Vagrant SSH 설정 등을 명시
+
+### Exec Vagrant CLI
+
+``` bash
+# 노드 생성 및 설정
+vagrant up
+
+# 생성된 노드 정보 확인
+vagrant status
+
+# 노드 접속
+vagrant ssh ${node_name}
+
+# 생성된 노드 제거
+vagrant destroy
+```
