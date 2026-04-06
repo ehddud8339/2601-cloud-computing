@@ -7,7 +7,7 @@ cluster_private_key = File.read(File.expand_path("cluster_key", __dir__)).strip
 cluster_public_key = File.read(File.expand_path("cluster_key.pub", __dir__)).strip
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/jammy64"
+  config.vm.box = "bento/ubuntu-24.04"
   
   # node 갯수와 ip, ssh 형식 지정
   node_count = 3
