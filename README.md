@@ -36,3 +36,15 @@ vagrant ssh ${node_name}
 # 생성된 노드 제거
 vagrant destroy
 ```
+
+### Trouble Shooting
+
+노드 내에서 다른 노드로의 ssh 접속 시, `permission denied` 발생
+
+host에서 `id_ed25519 -> cluster_key`를 생성하여 vagrant 공용 키로 사용
+
+Vagrantfile을 수정하여 `/home/vagrant/.ssh` 디렉터리 생성 후, public, private, authorized key 삽입 후 권한 설정
+
+`/home/vagrant/.ssh/authorized_key`를 `sudo tee`로 덮어씌우면 `vagrant ssh`의 ssh 정보가 사라져 `Permission denined` 발생
+
+append 방식으로 추가만 해야 `vagrant ssh`, `ssh node1/node2/node3` 가능
