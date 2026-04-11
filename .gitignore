@@ -2,4 +2,6 @@
 ./IaC/cluster_key.pub
 ./DSS/cluster_key
 ./DSS/cluster_key.pub
+.codex
+./DSS/.codex
 *.box
