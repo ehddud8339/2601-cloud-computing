@@ -1,3 +1,5 @@
-cluster_key
-cluster_key.pub
+./IaC/cluster_key
+./IaC/cluster_key.pub
+./DSS/cluster_key
+./DSS/cluster_key.pub
 *.box
