@@ -1,0 +1,263 @@
+# 2025126653 이동영 - S3 Lab (MinIO)
+
+require "fileutils"
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "bento/ubuntu-24.04"
+  config.vm.boot_timeout = 600
+
+  node_count = 3
+  disk_count = 4
+  server_pools = [
+    { node_start: 1, node_end: node_count,
+      disk_start: 1, disk_end: disk_count }
+  ]
+
+  disk_size_mb = 10 * 1024
+  vm_memory_mb = 4096
+  vm_cpus = 2
+  ip_base = "192.168.56."
+  ip_offset = 100
+  api_host_port_base = 9100
+  console_host_port_base = 9200
+
+  minio_api_port = 9000
+  minio_console_port = 9001
+  minio_root_user = "admin"
+  minio_root_password = "password123"
+  minio_standard_parity = 4
+  public_bucket = "public-bucket"
+  private_bucket = "private-bucket"
+  readonly_policy = "private-readonly"
+  readonly_users = {
+    "node1-readonly" => "node1-readonly123",
+    "node2-readonly" => "node2-readonly123"
+  }
+
+  disk_dir = File.expand_path(".vagrant/disks", __dir__)
+  cache_dir = "/vagrant/.vagrant/minio-cache"
+  FileUtils.mkdir_p(disk_dir)
+
+  raise "server_pools must contain at least one pool" if server_pools.empty?
+
+  server_pools.each do |pool|
+    raise "server pool must define node_start, node_end, disk_start, and disk_end" unless
+      pool.key?(:node_start) && pool.key?(:node_end) && pool.key?(:disk_start) && pool.key?(:disk_end)
+    raise "server pool node_start must be >= 1" if pool[:node_start] < 1
+    raise "server pool disk_start must be >= 1" if pool[:disk_start] < 1
+    raise "server pool node_start must be <= node_end" if pool[:node_start] > pool[:node_end]
+    raise "server pool disk_start must be <= disk_end" if pool[:disk_start] > pool[:disk_end]
+    raise "server pool node range exceeds node_count" if pool[:node_end] > node_count
+    raise "server pool disk range exceeds disk_count" if pool[:disk_end] > disk_count
+  end
+
+  minio_volumes = server_pools.map do |pool|
+    "http://node{#{pool[:node_start]}...#{pool[:node_end]}}:#{minio_api_port}/data/disk{#{pool[:disk_start]}...#{pool[:disk_end]}}/minio"
+  end.join(" ")
+  disk_numbers = (1..disk_count).to_a.join(" ")
+
+  hosts_entries = (1..node_count).map do |i|
+    "#{ip_base}#{ip_offset + i} node#{i}"
+  end.join("\n")
+
+  (1..node_count).each do |iter|
+    node_name = "node#{iter}"
+    admin_node_name = "node#{node_count}"
+    vm_name = "s3-#{node_name}"
+    node_ip = "#{ip_base}#{ip_offset + iter}"
+
+    config.vm.define vm_name do |node|
+      node.vm.hostname = node_name
+      node.vm.network "private_network", ip: node_ip
+      node.vm.network "forwarded_port", guest: minio_api_port, host: api_host_port_base + iter, auto_correct: true
+      node.vm.network "forwarded_port", guest: minio_console_port, host: console_host_port_base + iter, auto_correct: true
+
+      node.vm.provider "virtualbox" do |vb|
+        vb.name = vm_name
+        vb.memory = vm_memory_mb
+        vb.cpus = vm_cpus
+
+        (1..disk_count).each do |disk|
+          disk_path = File.join(disk_dir, "#{vm_name}-disk#{disk}.vdi")
+          unless File.exist?(disk_path)
+            vb.customize ["createhd", "--filename", disk_path, "--size", disk_size_mb]
+          end
+          vb.customize [
+            "storageattach", :id,
+            "--storagectl", "SATA Controller",
+            "--port", disk,
+            "--device", 0,
+            "--type", "hdd",
+            "--medium", disk_path
+          ]
+        end
+      end
+
+      node.vm.provision "shell", inline: <<-SHELL
+        set -eu
+        export DEBIAN_FRONTEND=noninteractive
+
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade \
+          -o Dpkg::Options::="--force-confdef" \
+          -o Dpkg::Options::="--force-confold" \
+          curl xfsprogs
+
+        sudo sed -i '/node[0-9]\\+/d' /etc/hosts
+        cat <<'EOF' | sudo tee -a /etc/hosts >/dev/null
+#{hosts_entries}
+EOF
+
+        sudo systemctl stop minio >/dev/null 2>&1 || true
+
+        for mount_dir in /data/disk*; do
+          if mountpoint -q "$mount_dir"; then
+            sudo umount "$mount_dir"
+          fi
+        done
+        sudo sed -i '/\\/data\\/disk[0-9]\\+/d' /etc/fstab
+
+        devices="$(lsblk -ndo NAME,TYPE | awk '$2 == "disk" { print "/dev/" $1 }' | grep -v '^/dev/sda$' | sort)"
+        device_count="$(printf "%s\\n" "$devices" | sed '/^$/d' | wc -l)"
+        if [ "$device_count" -lt "#{disk_count}" ]; then
+          echo "expected #{disk_count} data disks, found $device_count: $devices" >&2
+          exit 1
+        fi
+
+        for disk in #{disk_numbers}; do
+          device="$(printf "%s\\n" "$devices" | sed -n "${disk}p")"
+          mount_dir="/data/disk${disk}"
+
+          until [ -b "$device" ]; do
+            sleep 1
+          done
+
+          if ! sudo blkid "$device" >/dev/null 2>&1; then
+            sudo mkfs.xfs -f "$device"
+          fi
+
+          uuid="$(sudo blkid -s UUID -o value "$device")"
+          sudo mkdir -p "$mount_dir"
+
+          if ! grep -q "UUID=$uuid" /etc/fstab; then
+            echo "UUID=$uuid $mount_dir xfs defaults,noatime 0 2" | sudo tee -a /etc/fstab >/dev/null
+          fi
+
+          if ! mountpoint -q "$mount_dir"; then
+            sudo mount "$mount_dir"
+          fi
+          sudo mkdir -p "$mount_dir/minio"
+        done
+
+        if ! id minio-user >/dev/null 2>&1; then
+          sudo useradd --system --user-group --home-dir /var/lib/minio --shell /usr/sbin/nologin minio-user
+        fi
+
+        sudo mkdir -p /var/lib/minio
+        sudo chown -R minio-user:minio-user /var/lib/minio /data/disk*/minio
+
+        sudo mkdir -p #{cache_dir}
+
+        if [ ! -x /usr/local/bin/minio ]; then
+          if [ ! -s #{cache_dir}/minio ]; then
+            curl --fail --location --show-error --retry 5 --connect-timeout 10 --max-time 300 \
+              https://dl.min.io/server/minio/release/linux-amd64/minio -o #{cache_dir}/minio
+          fi
+          sudo install -m 0755 #{cache_dir}/minio /usr/local/bin/minio
+        fi
+
+        if [ "$(hostname)" = "#{admin_node_name}" ]; then
+          if [ ! -x /usr/local/bin/mc ]; then
+            if [ ! -s #{cache_dir}/mc ]; then
+              curl --fail --location --show-error --retry 5 --connect-timeout 10 --max-time 300 \
+                https://dl.min.io/client/mc/release/linux-amd64/mc -o #{cache_dir}/mc
+            fi
+            sudo install -m 0755 #{cache_dir}/mc /usr/local/bin/mc
+          fi
+        else
+          sudo rm -f /usr/local/bin/mc
+        fi
+
+        cat <<'EOF' | sudo tee /etc/default/minio >/dev/null
+MINIO_VOLUMES="#{minio_volumes}"
+MINIO_OPTS="--address :#{minio_api_port} --console-address :#{minio_console_port}"
+MINIO_ROOT_USER="#{minio_root_user}"
+MINIO_ROOT_PASSWORD="#{minio_root_password}"
+MINIO_STORAGE_CLASS_STANDARD="EC:#{minio_standard_parity}"
+EOF
+
+        cat <<'EOF' | sudo tee /etc/systemd/system/minio.service >/dev/null
+[Unit]
+Description=MinIO distributed S3-compatible object storage
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=minio-user
+Group=minio-user
+EnvironmentFile=/etc/default/minio
+ExecStart=/usr/local/bin/minio server $MINIO_OPTS $MINIO_VOLUMES
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now minio
+
+        if [ "$(hostname)" = "#{admin_node_name}" ]; then
+          until curl -fsS http://node1:#{minio_api_port}/minio/health/ready >/dev/null; do
+            echo "waiting for MinIO cluster readiness..."
+            sleep 5
+          done
+          until mc alias set local http://node1:#{minio_api_port} #{minio_root_user} #{minio_root_password} >/dev/null 2>&1; do
+            echo "waiting for MinIO admin API initialization..."
+            sleep 5
+          done
+
+          mc mb --ignore-existing local/#{public_bucket}
+          mc mb --ignore-existing local/#{private_bucket}
+          mc anonymous set download local/#{public_bucket}
+
+          cat <<'EOF' >/tmp/#{readonly_policy}.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::#{private_bucket}"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::#{private_bucket}/*"
+      ]
+    }
+  ]
+}
+EOF
+
+          mc admin policy create local #{readonly_policy} /tmp/#{readonly_policy}.json >/dev/null 2>&1 || true
+#{readonly_users.map { |user, password| <<~USER.chomp
+          mc admin user add local #{user} #{password} >/dev/null 2>&1 || true
+          mc admin policy attach local #{readonly_policy} --user #{user}
+USER
+}.join("\n")}
+
+          mc admin info local
+        fi
+      SHELL
+    end
+  end
+end
