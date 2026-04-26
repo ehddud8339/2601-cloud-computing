@@ -26,13 +26,6 @@ Vagrant.configure("2") do |config|
   minio_root_user = "admin"
   minio_root_password = "password123"
   minio_standard_parity = 4
-  public_bucket = "public-bucket"
-  private_bucket = "private-bucket"
-  readonly_policy = "private-readonly"
-  readonly_users = {
-    "node1-readonly" => "node1-readonly123",
-    "node2-readonly" => "node2-readonly123"
-  }
 
   disk_dir = File.expand_path(".vagrant/disks", __dir__)
   cache_dir = "/vagrant/.vagrant/minio-cache"
@@ -217,45 +210,6 @@ EOF
             echo "waiting for MinIO admin API initialization..."
             sleep 5
           done
-
-          mc mb --ignore-existing local/#{public_bucket}
-          mc mb --ignore-existing local/#{private_bucket}
-          mc anonymous set download local/#{public_bucket}
-
-          cat <<'EOF' >/tmp/#{readonly_policy}.json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::#{private_bucket}"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::#{private_bucket}/*"
-      ]
-    }
-  ]
-}
-EOF
-
-          mc admin policy create local #{readonly_policy} /tmp/#{readonly_policy}.json >/dev/null 2>&1 || true
-#{readonly_users.map { |user, password| <<~USER.chomp
-          mc admin user add local #{user} #{password} >/dev/null 2>&1 || true
-          mc admin policy attach local #{readonly_policy} --user #{user}
-USER
-}.join("\n")}
-
-          mc admin info local
         fi
       SHELL
     end
